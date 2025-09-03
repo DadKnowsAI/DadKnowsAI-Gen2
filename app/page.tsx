@@ -1,19 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import EmailWall from "./components/EmailWall";
 
 type Role = "user" | "assistant";
 type Msg = { role: Role; content: string };
 
 export default function Home() {
   const [messages, setMessages] = useState<Msg[]>([
-    {
-      role: "assistant",
-      content: "Hi! Ask me anything. I give practical, step-by-step answers.",
-    },
+    { role: "assistant", content: "Hi! Ask me anything. I give practical, step-by-step answers." },
   ]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [showWall, setShowWall] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -25,9 +24,6 @@ export default function Home() {
     if (!text || sending) return;
 
     const userMsg: Msg = { role: "user", content: text };
-    const payload = [...messages, userMsg];
-
-    // show "Me" message + empty DadKnowsAI bubble for streaming
     setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "" }]);
     setInput("");
     setSending(true);
@@ -36,8 +32,20 @@ export default function Home() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: payload }),
+        body: JSON.stringify({ messages: [...messages, userMsg] }),
       });
+
+      if (res.status === 429) {
+        setMessages((prev) =>
+          prev.map((m, i) =>
+            i === prev.length - 1
+              ? { ...m, content: "Please sign up to keep chatting." }
+              : m
+          )
+        );
+        setShowWall(true);
+        return;
+      }
 
       const ct = res.headers.get("content-type") ?? "";
       const isText = ct.startsWith("text/") || ct.includes("charset");
@@ -46,9 +54,7 @@ export default function Home() {
         const errText = await res.text().catch(() => "Unknown error");
         setMessages((prev) =>
           prev.map((m, i) =>
-            i === prev.length - 1
-              ? { ...m, content: `[error from server]\n${errText}` }
-              : m
+            i === prev.length - 1 ? { ...m, content: `[error from server]\n${errText}` } : m
           )
         );
         return;
@@ -57,7 +63,6 @@ export default function Home() {
       if (res.body) {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
-
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
@@ -90,14 +95,12 @@ export default function Home() {
     <main className="mx-auto max-w-3xl p-4">
       <h1 className="mb-4 text-3xl font-extrabold">DadKnowsAI (Beta)</h1>
 
-      {/* Messages */}
       <section className="mb-36 space-y-3">
         {messages.map((m, idx) => {
           const isUser = m.role === "user";
           return (
             <div key={idx} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
               <div className="max-w-[75%]">
-                {/* label */}
                 <div
                   className={`mb-1 text-[10px] font-semibold tracking-wide uppercase ${
                     isUser ? "text-slate-500 text-right" : "text-slate-500"
@@ -105,8 +108,6 @@ export default function Home() {
                 >
                   {isUser ? "Me" : "DadKnowsAI"}
                 </div>
-
-                {/* bubble */}
                 <div
                   className={`whitespace-pre-wrap rounded-2xl p-3 shadow-sm text-[1.05rem] leading-7 ${
                     isUser
@@ -123,7 +124,6 @@ export default function Home() {
         <div ref={endRef} />
       </section>
 
-      {/* Input (sticky bottom) */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -138,17 +138,26 @@ export default function Home() {
             aria-label="Type your question"
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            disabled={sending || showWall}
           />
           <button
             type="submit"
             className="rounded-xl px-5 py-3 text-lg font-bold text-white disabled:opacity-50 bg-blue-600 hover:bg-blue-700 active:bg-blue-800"
-            disabled={sending}
+            disabled={sending || showWall}
           >
             Send
           </button>
         </div>
         <div className="h-3" />
       </form>
+
+      <EmailWall
+        open={showWall}
+        onClose={() => setShowWall(false)}
+        onSuccess={() => {
+          // cookie is set by the server; nothing else needed
+        }}
+      />
     </main>
   );
 }
