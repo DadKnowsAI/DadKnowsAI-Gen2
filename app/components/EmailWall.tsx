@@ -32,8 +32,9 @@ export default function EmailWall({
       }
       onSuccess();
       onClose();
-    } catch (e: any) {
-      setError(e?.message || "Something went wrong");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Something went wrong";
+      setError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -63,21 +64,4 @@ export default function EmailWall({
             disabled={submitting}
             className="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            {submitting ? "Submitting…" : "Continue"}
-          </button>
-          <button
-            onClick={onClose}
-            disabled={submitting}
-            className="rounded-xl border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Not now
-          </button>
-        </div>
-
-        <div className="mt-3 text-xs text-slate-500">
-          By continuing, you agree to our Terms and Privacy.
-        </div>
-      </div>
-    </div>
-  );
-}
+            {submit
