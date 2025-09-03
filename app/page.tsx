@@ -1,0 +1,154 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
+type Role = "user" | "assistant";
+type Msg = { role: Role; content: string };
+
+export default function Home() {
+  const [messages, setMessages] = useState<Msg[]>([
+    {
+      role: "assistant",
+      content: "Hi! Ask me anything. I give practical, step-by-step answers.",
+    },
+  ]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const endRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
+
+  async function send() {
+    const text = input.trim();
+    if (!text || sending) return;
+
+    const userMsg: Msg = { role: "user", content: text };
+    const payload = [...messages, userMsg];
+
+    // show "Me" message + empty DadKnowsAI bubble for streaming
+    setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "" }]);
+    setInput("");
+    setSending(true);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: payload }),
+      });
+
+      const ct = res.headers.get("content-type") ?? "";
+      const isText = ct.startsWith("text/") || ct.includes("charset");
+
+      if (!res.ok || !isText) {
+        const errText = await res.text().catch(() => "Unknown error");
+        setMessages((prev) =>
+          prev.map((m, i) =>
+            i === prev.length - 1
+              ? { ...m, content: `[error from server]\n${errText}` }
+              : m
+          )
+        );
+        return;
+      }
+
+      if (res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          setMessages((prev) =>
+            prev.map((m, i) =>
+              i === prev.length - 1 ? { ...m, content: m.content + chunk } : m
+            )
+          );
+        }
+      } else {
+        const full = await res.text();
+        setMessages((prev) =>
+          prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: full } : m))
+        );
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setMessages((prev) =>
+        prev.map((m, i) =>
+          i === prev.length - 1 ? { ...m, content: `[connection error] ${msg}` } : m
+        )
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <main className="mx-auto max-w-3xl p-4">
+      <h1 className="mb-4 text-3xl font-extrabold">DadKnowsAI (Beta)</h1>
+
+      {/* Messages */}
+      <section className="mb-36 space-y-3">
+        {messages.map((m, idx) => {
+          const isUser = m.role === "user";
+          return (
+            <div key={idx} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+              <div className="max-w-[75%]">
+                {/* label */}
+                <div
+                  className={`mb-1 text-[10px] font-semibold tracking-wide uppercase ${
+                    isUser ? "text-slate-500 text-right" : "text-slate-500"
+                  }`}
+                >
+                  {isUser ? "Me" : "DadKnowsAI"}
+                </div>
+
+                {/* bubble */}
+                <div
+                  className={`whitespace-pre-wrap rounded-2xl p-3 shadow-sm text-[1.05rem] leading-7 ${
+                    isUser
+                      ? "bg-blue-50 border border-blue-100 text-slate-900"
+                      : "bg-white border border-slate-200 text-slate-900"
+                  } ${isUser ? "text-right" : "text-left"}`}
+                >
+                  {m.content}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        <div ref={endRef} />
+      </section>
+
+      {/* Input (sticky bottom) */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          send();
+        }}
+        className="fixed inset-x-0 bottom-0 mx-auto max-w-3xl bg-white/80 backdrop-blur px-4 pb-4"
+      >
+        <div className="flex gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-md">
+          <input
+            className="flex-1 rounded-xl px-4 py-3 text-xl font-semibold outline-none placeholder:text-slate-400 placeholder:font-medium"
+            placeholder="Type your question…"
+            aria-label="Type your question"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+          />
+          <button
+            type="submit"
+            className="rounded-xl px-5 py-3 text-lg font-bold text-white disabled:opacity-50 bg-blue-600 hover:bg-blue-700 active:bg-blue-800"
+            disabled={sending}
+          >
+            Send
+          </button>
+        </div>
+        <div className="h-3" />
+      </form>
+    </main>
+  );
+}
