@@ -1,19 +1,17 @@
-// app/api/subscribe/route.ts
 import { NextRequest } from "next/server";
 
-export const runtime = "nodejs"; // keep Node for parity
+export const runtime = "nodejs";
 
 const RAW_KEY = process.env.BEEHIIV_API_KEY || "";
 const RAW_PUB = process.env.BEEHIIV_PUBLICATION_ID || "";
 
-// Trim to avoid hidden spaces/newlines from pasting into env vars
 const BEEHIIV_API_KEY = RAW_KEY.trim();
 const PUB_ID = RAW_PUB.trim();
 
 type Payload = {
   email?: string;
-  source?: string;   // optional UTM/source tag (e.g., "beta-landing")
-  honeypot?: string; // optional bot trap: if present, silently succeed
+  source?: string;   // e.g., "beta-landing"
+  honeypot?: string; // optional bot trap
 };
 
 function isValidEmail(e: string) {
@@ -29,63 +27,90 @@ export async function POST(req: NextRequest) {
       return json({ ok: false, error: "invalid_json" }, 400);
     }
 
-    // Bot trap: if honeypot is filled, pretend success (no-op)
-    if (body.honeypot) {
-      return withUnlockCookie(json({ ok: true }));
-    }
+    // Honeypot → silently succeed
+    if (body.honeypot) return withUnlockCookie(json({ ok: true }));
 
     const raw = (body.email || "").trim().toLowerCase();
+    const source = (body.source || "chat_soft_wall").trim();
+
     if (!raw || !isValidEmail(raw)) {
       return json({ ok: false, error: "invalid_email" }, 400);
     }
-
     if (!BEEHIIV_API_KEY || !PUB_ID) {
       return json({ ok: false, error: "beehiiv_not_configured" }, 500);
     }
 
+    // --- Build payloads ---
+    // 1) Try with a custom field for easier segmenting
     const url = `https://api.beehiiv.com/v2/publications/${PUB_ID}/subscriptions`;
-    const payload = JSON.stringify({
+    const withCustom = JSON.stringify({
       email: raw,
       reactivate_existing: true,
       send_welcome_email: true,
-      utm_source: body.source || "chat_soft_wall",
+      utm_source: source,                // what you had
+      custom_fields: { signup_source: source }, // NEW: for dynamic segments
     });
 
-    // Try Authorization: Bearer first
-    let upstream = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${BEEHIIV_API_KEY}`,
-      },
-      body: payload,
-    });
+    const baseHeaders = {
+      "Content-Type": "application/json",
+    } as const;
 
-    // Fallback to X-Authorization if needed
-    if (upstream.status === 401) {
-      upstream = await fetch(url, {
+    // Helper to POST with either Bearer or X-Authorization (your original behavior)
+    const postBeehiiv = async (payload: string) => {
+      let r = await fetch(url, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "X-Authorization": BEEHIIV_API_KEY,
+          ...baseHeaders,
+          Authorization: `Bearer ${BEEHIIV_API_KEY}`,
         },
         body: payload,
       });
-    }
+      if (r.status === 401) {
+        r = await fetch(url, {
+          method: "POST",
+          headers: {
+            ...baseHeaders,
+            "X-Authorization": BEEHIIV_API_KEY,
+          },
+          body: payload,
+        });
+      }
+      return r;
+    };
 
-    // Treat already-subscribed/reactivate codes as success for UX
+    // --- Send (attempt with custom field first) ---
+    console.log("DEBUG subscribe →", { email: raw, source, try: "withCustom" });
+    let upstream = await postBeehiiv(withCustom);
+
+    // If Beehiiv rejects custom_fields (400/422), retry *without* it
     if (!upstream.ok && ![409, 422].includes(upstream.status)) {
-      const text = await safeText(upstream);
-      return json(
-        { ok: false, error: "beehiiv_error", status: upstream.status, detail: text.slice(0, 500) },
-        upstream.status
-      );
+      // Prepare fallback payload (no custom_fields)
+      const withoutCustom = JSON.stringify({
+        email: raw,
+        reactivate_existing: true,
+        send_welcome_email: true,
+        utm_source: source,
+      });
+
+      console.warn("Beehiiv error (withCustom)", upstream.status, await safeText(upstream));
+      console.log("DEBUG subscribe →", { email: raw, source, try: "withoutCustom" });
+      upstream = await postBeehiiv(withoutCustom);
     }
 
-    // Success → set the same unlock cookie you already use
+    // If still not ok and not already-subscribed codes, bubble minimal error (but keep UX smooth)
+    if (!upstream.ok && ![409, 422].includes(upstream.status)) {
+      const detail = (await safeText(upstream)).slice(0, 500);
+      console.error("Beehiiv error (final)", upstream.status, detail);
+      // During beta we still unlock, but return ok:true so the UI proceeds
+      return withUnlockCookie(json({ ok: true, warn: "beehiiv_error" }));
+    }
+
+    // Success / already subscribed → set unlock cookie
     return withUnlockCookie(json({ ok: true }));
-  } catch (_err: unknown) {
-    return json({ ok: false, error: "subscribe_error" }, 500);
+  } catch (e) {
+    console.error("Subscribe error", e);
+    // Keep beta UX smooth
+    return withUnlockCookie(json({ ok: true, warn: "subscribe_error" }));
   }
 }
 
@@ -101,7 +126,6 @@ function withUnlockCookie(res: Response) {
   const headers = new Headers(res.headers);
   headers.set(
     "Set-Cookie",
-    // 1 year, secure, HttpOnly
     "dkai_captured=1; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax"
   );
   return new Response(res.body, { status: res.status, headers });
@@ -114,4 +138,3 @@ async function safeText(r: Response): Promise<string> {
     return "";
   }
 }
-
