@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { trackEvent } from "@/lib/analytics";
 
 type Props = {
   open: boolean;
@@ -18,6 +19,9 @@ export default function EmailWall({ open, onClose, onSuccess }: Props) {
     e.preventDefault();
     setSubmitting(true);
     try {
+      const domain = (email.split("@")[1] || "").toLowerCase();
+      trackEvent("email_submit_attempt", { email_domain: domain, variant: "softwall_v1" });
+
       const res = await fetch("/api/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -25,15 +29,8 @@ export default function EmailWall({ open, onClose, onSuccess }: Props) {
       });
       if (!res.ok) throw new Error("subscribe_failed");
 
-      // Optional GA event (safe if gtag missing)
-      if (typeof window !== "undefined" && (window as any).gtag) {
-        (window as any).gtag("event", "email_submit_success", {
-          source: "softwall",
-          variant: "softwall_v1",
-        });
-      }
+      trackEvent("email_submit_success", { source: "softwall", variant: "softwall_v1" });
 
-      // remember signup so wall doesn’t show again
       try {
         localStorage.setItem("dkai_signed_in", "1");
       } catch {}
@@ -70,11 +67,7 @@ export default function EmailWall({ open, onClose, onSuccess }: Props) {
                 >
                   {submitting ? "Signing up…" : "Sign up"}
                 </button>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="rounded border px-3"
-                >
+                <button type="button" onClick={onClose} className="rounded border px-3">
                   Cancel
                 </button>
               </div>
@@ -85,10 +78,7 @@ export default function EmailWall({ open, onClose, onSuccess }: Props) {
             <p className="font-semibold text-green-700">
               Thanks for signing up! You can now resume your chat!
             </p>
-            <button
-              onClick={onClose}
-              className="mt-4 w-full rounded bg-blue-600 p-2 text-white"
-            >
+            <button onClick={onClose} className="mt-4 w-full rounded bg-blue-600 p-2 text-white">
               Back to chat
             </button>
           </>
