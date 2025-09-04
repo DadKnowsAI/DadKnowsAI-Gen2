@@ -1,92 +1,96 @@
 "use client";
-
 import { useState } from "react";
 
-export default function EmailWall({ onClose }: { onClose: () => void }) {
-  const [email, setEmail] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
+type Props = {
+  open: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+};
 
-  async function submit() {
-    setLoading(true);
-    setError("");
+export default function EmailWall({ open, onClose, onSuccess }: Props) {
+  const [email, setEmail] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+
+  if (!open) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
     try {
       const res = await fetch("/api/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
+      if (!res.ok) throw new Error("subscribe_failed");
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text);
+      // Optional GA event (safe if gtag missing)
+      if (typeof window !== "undefined" && (window as any).gtag) {
+        (window as any).gtag("event", "email_submit_success", {
+          source: "softwall",
+          variant: "softwall_v1",
+        });
       }
 
-      // ✅ success
-      setSuccess(true);
+      // remember signup so wall doesn’t show again
+      try {
+        localStorage.setItem("dkai_signed_in", "1");
+      } catch {}
 
-      // auto-close after 2.5s
-      setTimeout(() => {
-        onClose();
-      }, 2500);
-
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Something went wrong";
-      setError(msg);
+      setDone(true);
+      onSuccess();
+    } catch {
+      alert("Signup failed. Please try again.");
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
-  }
+  };
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black/40 z-50">
-      <div className="bg-white rounded-2xl p-6 w-[95%] max-w-md shadow-lg text-center">
-        {!success ? (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl">
+        {!done ? (
           <>
-            <h2 className="text-xl font-bold mb-2">Keep chatting with DadKnowsAI</h2>
-            <p className="text-gray-600 mb-4">
-              Enter your email to continue. We’ll add you to the beta list.
-            </p>
-
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="w-full border rounded-lg px-3 py-2 mb-3"
-              disabled={loading}
-            />
-
-            {error && (
-              <p className="text-sm text-red-500 mb-3 whitespace-pre-wrap">{error}</p>
-            )}
-
-            <div className="flex justify-center gap-3">
-              <button
-                onClick={submit}
-                disabled={loading || !email}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50"
-              >
-                {loading ? "Submitting..." : "Continue"}
-              </button>
-              <button
-                onClick={onClose}
-                disabled={loading}
-                className="bg-gray-200 px-4 py-2 rounded-lg font-semibold hover:bg-gray-300"
-              >
-                Not now
-              </button>
-            </div>
+            <h2 className="mb-2 text-xl font-semibold">Join to continue</h2>
+            <form onSubmit={handleSubmit} className="space-y-3">
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full rounded border p-2"
+              />
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 rounded bg-blue-600 p-2 text-white disabled:opacity-60"
+                >
+                  {submitting ? "Signing up…" : "Sign up"}
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded border px-3"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
           </>
         ) : (
           <>
-            <h2 className="text-xl font-bold mb-2 text-green-600">
-              Thanks for signing up as a beta tester!
-            </h2>
-            <p className="text-gray-700">
-              You can now continue your conversation.
+            <p className="font-semibold text-green-700">
+              Thanks for signing up! You can now resume your chat!
             </p>
+            <button
+              onClick={onClose}
+              className="mt-4 w-full rounded bg-blue-600 p-2 text-white"
+            >
+              Back to chat
+            </button>
           </>
         )}
       </div>

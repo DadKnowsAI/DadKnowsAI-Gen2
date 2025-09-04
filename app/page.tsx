@@ -6,22 +6,50 @@ import EmailWall from "./components/EmailWall";
 type Role = "user" | "assistant";
 type Msg = { role: Role; content: string };
 
+// Safe GA wrapper (won't crash if gtag isn't loaded yet)
+function trackEvent(name: string, params: Record<string, any> = {}) {
+  if (typeof window !== "undefined" && (window as any).gtag) {
+    (window as any).gtag("event", name, params);
+  }
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Msg[]>([
-    { role: "assistant", content: "Hi! Ask me anything. I give practical, step-by-step answers." },
+    {
+      role: "assistant",
+      content: "Hi! Ask me anything. I give practical, step-by-step answers.",
+    },
   ]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [showWall, setShowWall] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
 
+  // Keep your auto-scroll
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
 
+  // Decide whether to show the soft wall + fire wall_view
+  useEffect(() => {
+    const has = typeof window !== "undefined" && localStorage.getItem("dkai_signed_in") === "1";
+    setShowWall(!has);
+    if (!has) trackEvent("wall_view", { variant: "softwall_v1" });
+  }, []);
+
   async function send() {
     const text = input.trim();
     if (!text || sending) return;
+
+    // Track “first chat after signup” once
+    try {
+      const ts = localStorage.getItem("dkai_signup_ts");
+      if (ts) {
+        const seconds = Math.round((Date.now() - Number(ts)) / 1000);
+        trackEvent("chat_first_message_after_signup", { seconds_since_signup: seconds });
+        localStorage.removeItem("dkai_signup_ts"); // only once
+      }
+    } catch {}
 
     const userMsg: Msg = { role: "user", content: text };
     setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "" }]);
@@ -155,7 +183,12 @@ export default function Home() {
         open={showWall}
         onClose={() => setShowWall(false)}
         onSuccess={() => {
-          // cookie is set by the server; nothing else needed
+          // remember signup so the wall stays hidden and we can time the first chat
+          try {
+            localStorage.setItem("dkai_signed_in", "1");
+            localStorage.setItem("dkai_signup_ts", String(Date.now()));
+          } catch {}
+          setShowWall(false);
         }}
       />
     </main>
