@@ -2,10 +2,22 @@
 
 import { useEffect, useRef, useState } from "react";
 import EmailWall from "./components/EmailWall";
-import { trackEvent } from "@/lib/analytics";
 
 type Role = "user" | "assistant";
 type Msg = { role: Role; content: string };
+
+/* ---------------- GA helper (safe, typed) ---------------- */
+declare global {
+  interface Window {
+    gtag?: (...args: unknown[]) => void;
+  }
+}
+function sendGA(name: string, params: Record<string, unknown> = {}) {
+  if (typeof window !== "undefined" && typeof window.gtag === "function") {
+    window.gtag("event", name, params);
+  }
+}
+/* --------------------------------------------------------- */
 
 export default function Home() {
   const [messages, setMessages] = useState<Msg[]>([
@@ -16,25 +28,51 @@ export default function Home() {
   const [showWall, setShowWall] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
 
+  // keep your auto-scroll
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
 
+  // Show the wall ONLY if not signed in AND the free chat was already used
   useEffect(() => {
-    const has = typeof window !== "undefined" && localStorage.getItem("dkai_signed_in") === "1";
-    setShowWall(!has);
-    if (!has) trackEvent("wall_view", { variant: "softwall_v1" });
+    const signed =
+      typeof window !== "undefined" && localStorage.getItem("dkai_signed_in") === "1";
+    const freeUsed =
+      typeof window !== "undefined" && localStorage.getItem("dkai_free_used") === "1";
+
+    const shouldShow = !signed && freeUsed;
+    setShowWall(shouldShow);
+
+    if (shouldShow) {
+      sendGA("wall_view", { variant: "softwall_v1" });
+    }
   }, []);
+
+  // After one complete answer, show the wall for unsigned users (only once)
+  function maybeTriggerWallAfterFreeAnswer() {
+    try {
+      const signed = localStorage.getItem("dkai_signed_in") === "1";
+      const freeUsed = localStorage.getItem("dkai_free_used") === "1";
+      if (!signed && !freeUsed) {
+        localStorage.setItem("dkai_free_used", "1"); // mark the one free Q→A as used
+        setShowWall(true);
+        sendGA("wall_view", { variant: "softwall_v1" });
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }
 
   async function send() {
     const text = input.trim();
     if (!text || sending) return;
 
+    // Track “first chat after signup” once
     try {
       const ts = localStorage.getItem("dkai_signup_ts");
       if (ts) {
         const seconds = Math.round((Date.now() - Number(ts)) / 1000);
-        trackEvent("chat_first_message_after_signup", { seconds_since_signup: seconds });
+        sendGA("chat_first_message_after_signup", { seconds_since_signup: seconds });
         localStorage.removeItem("dkai_signup_ts");
       }
     } catch {}
@@ -75,6 +113,7 @@ export default function Home() {
       }
 
       if (res.body) {
+        // --- streaming path ---
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         while (true) {
@@ -87,11 +126,16 @@ export default function Home() {
             )
           );
         }
+        // one full streamed answer finished → trigger wall if needed
+        maybeTriggerWallAfterFreeAnswer();
       } else {
+        // --- non-streaming path ---
         const full = await res.text();
         setMessages((prev) =>
           prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: full } : m))
         );
+        // one full non-streamed answer finished → trigger wall if needed
+        maybeTriggerWallAfterFreeAnswer();
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -171,7 +215,7 @@ export default function Home() {
         onSuccess={() => {
           try {
             localStorage.setItem("dkai_signed_in", "1");
-            localStorage.setItem("dkai_signup_ts", String(Date.now()));
+            localStorage.setItem("dkai_signup_ts", String(Date.now())); // analytics timing
           } catch {}
           setShowWall(false);
         }}
