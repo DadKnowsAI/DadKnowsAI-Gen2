@@ -2,6 +2,15 @@
 import { useState } from "react";
 import { trackEvent } from "@/lib/analytics";
 
+// Let TS know about dkTrack injected via app/layout.tsx
+declare global {
+  interface Window {
+    dkTrack?: {
+      lead: (extra?: Record<string, unknown>) => void;
+    };
+  }
+}
+
 type Props = { open: boolean; onClose: () => void; onSuccess: () => void };
 
 export default function EmailWall({ open, onClose, onSuccess }: Props) {
@@ -44,6 +53,17 @@ export default function EmailWall({ open, onClose, onSuccess }: Props) {
         variant: "softwall_v1",
         duplicate,
       });
+
+      // 🔔 Fire Facebook Lead (with a little context). Does nothing if dkTrack not present.
+      try {
+        window.dkTrack?.lead({
+          content_name: "Email Signup",
+          source: "softwall",
+          variant: "softwall_v1",
+          duplicate,
+          email_domain: domain || undefined,
+        });
+      } catch {}
 
       try { localStorage.setItem("dkai_signed_in", "1"); } catch {}
       setDone(true);

@@ -10,6 +10,12 @@ type Msg = { role: Role; content: string };
 declare global {
   interface Window {
     gtag?: (...args: unknown[]) => void;
+
+    // --- FB helpers we exposed in app/layout.tsx ---
+    dkTrack?: {
+      chatEngaged: (messagesCount?: number) => void;
+      lead: (extra?: Record<string, unknown>) => void;
+    };
   }
 }
 function sendGA(name: string, params: Record<string, unknown> = {}) {
@@ -55,6 +61,13 @@ export default function Home() {
       const current = Number(localStorage.getItem("dkai_free_count") || "0");
       const next = current + 1;
       localStorage.setItem("dkai_free_count", String(next));
+
+      // --- A) Fire ChatEngaged exactly at the second completed Q→A (unsigned users) ---
+      if (!signed && next === 2) {
+        try {
+          window.dkTrack?.chatEngaged(2);
+        } catch {}
+      }
 
       if (!signed && next >= 2) {
         setShowWall(true);
@@ -219,6 +232,11 @@ export default function Home() {
             localStorage.setItem("dkai_signed_in", "1");
             localStorage.setItem("dkai_signup_ts", String(Date.now())); // analytics timing
           } catch {}
+          // --- B) Fire Lead at the exact moment your existing success happens ---
+          try {
+            window.dkTrack?.lead({ content_name: "Email Signup" });
+          } catch {}
+
           setShowWall(false);
         }}
       />

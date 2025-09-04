@@ -47,31 +47,107 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
             fbq('init', '${FB_PIXEL_ID}');
             fbq('track', 'PageView');
+          `}
+        </Script>
 
-            // Expose a helper for conversions (use this after successful signup)
-            window.fbLead = function(payload) {
-              try {
-                if (typeof fbq === 'function') {
-                  if (payload && typeof payload === 'object') {
-                    fbq('track', 'Lead', payload);
-                  } else {
-                    fbq('track', 'Lead');
-                  }
+        {/* Attribution capture + helpers */}
+        <Script id="dk-attribution" strategy="afterInteractive">
+          {`
+            (function(){
+              // ---- 1) Capture UTM & fbclid once (first-touch) ----
+              function getQuery() {
+                try {
+                  var q = new URLSearchParams(window.location.search);
+                  return {
+                    utm_source: q.get('utm_source') || '',
+                    utm_medium: q.get('utm_medium') || '',
+                    utm_campaign: q.get('utm_campaign') || '',
+                    utm_content: q.get('utm_content') || '',
+                    utm_term: q.get('utm_term') || '',
+                    fbclid: q.get('fbclid') || ''
+                  };
+                } catch { return {}; }
+              }
+              var KEY_ATTR = 'dk_attrib_v1';
+              var KEY_CHAT = 'dk_chat_engaged';
+              var KEY_CHAT_COUNT = 'dk_chat_messages';
+
+              var existing = null;
+              try { existing = JSON.parse(localStorage.getItem(KEY_ATTR) || 'null'); } catch {}
+              if (!existing) {
+                var qp = getQuery();
+                // Compose _fbc (Facebook click token) best-effort from fbclid
+                var _fbc = '';
+                if (qp.fbclid) {
+                  _fbc = 'fb.1.' + Date.now() + '.' + qp.fbclid;
                 }
-              } catch (e) {}
-            };
+                var payload = {
+                  utm_source: qp.utm_source,
+                  utm_medium: qp.utm_medium,
+                  utm_campaign: qp.utm_campaign,
+                  utm_content: qp.utm_content,
+                  utm_term: qp.utm_term,
+                  fbclid: qp.fbclid,
+                  _fbc: _fbc
+                };
+                try { localStorage.setItem(KEY_ATTR, JSON.stringify(payload)); } catch {}
+              }
 
-            // Also support a custom event trigger if you prefer:
-            // window.dispatchEvent(new Event('dk:lead'))
-            window.addEventListener('dk:lead', function() {
-              try { if (typeof fbq === 'function') fbq('track', 'Lead'); } catch (e) {}
-            });
+              function readAttrib(){
+                try { return JSON.parse(localStorage.getItem(KEY_ATTR) || '{}'); }
+                catch { return {}; }
+              }
+
+              // ---- 2) Expose safe tracking helpers ----
+              window.dkTrack = {
+                chatEngaged: function(messagesCount){
+                  try {
+                    var m = Number(messagesCount || 0);
+                    localStorage.setItem(KEY_CHAT, '1');
+                    localStorage.setItem(KEY_CHAT_COUNT, String(m));
+                    var attrib = readAttrib();
+                    if (typeof fbq === 'function') {
+                      fbq('trackCustom', 'ChatEngaged', Object.assign({ messages: m }, attrib));
+                    }
+                  } catch(e){}
+                },
+                lead: function(extra){
+                  try {
+                    var attrib = readAttrib();
+                    var engaged = localStorage.getItem(KEY_CHAT) === '1';
+                    var m = Number(localStorage.getItem(KEY_CHAT_COUNT) || 0);
+                    var payload = Object.assign(
+                      {
+                        chat_engaged: engaged,
+                        messages: m
+                      },
+                      attrib,
+                      (extra && typeof extra === 'object') ? extra : {}
+                    );
+
+                    // Standard Lead with rich params
+                    if (typeof fbq === 'function') {
+                      fbq('track', 'Lead', payload);
+                    }
+                  } catch(e){}
+                }
+              };
+
+              // ---- 3) Optional: support custom DOM events (no code changes elsewhere) ----
+              window.addEventListener('dk:chat_engaged', function(e){
+                var c = (e && e.detail && e.detail.messages) ? e.detail.messages : 0;
+                try { window.dkTrack.chatEngaged(c); } catch {}
+              });
+              window.addEventListener('dk:lead', function(e){
+                try { window.dkTrack.lead((e && e.detail) || undefined); } catch {}
+              });
+            })();
           `}
         </Script>
       </head>
 
       <body>
-        {/* Meta Pixel <noscript> (recommended just inside <body>) */}
+        {/* Meta Pixel <noscript> */}
         <noscript>
           <img
             height="1"
