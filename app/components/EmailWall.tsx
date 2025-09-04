@@ -2,11 +2,12 @@
 import { useState } from "react";
 import { trackEvent } from "@/lib/analytics";
 
-// Let TS know about dkTrack injected via app/layout.tsx
+// Make this match page.tsx exactly
 declare global {
   interface Window {
     dkTrack?: {
-      lead: (extra?: Record<string, unknown>) => void;
+      chatEngaged?: (messagesCount?: number) => void;
+      lead?: (extra?: Record<string, unknown>) => void;
     };
   }
 }
@@ -54,9 +55,9 @@ export default function EmailWall({ open, onClose, onSuccess }: Props) {
         duplicate,
       });
 
-      // 🔔 Fire Facebook Lead (with a little context). Does nothing if dkTrack not present.
+      // Fire Facebook Lead (safe no-op if dkTrack missing)
       try {
-        window.dkTrack?.lead({
+        window.dkTrack?.lead?.({
           content_name: "Email Signup",
           source: "softwall",
           variant: "softwall_v1",
