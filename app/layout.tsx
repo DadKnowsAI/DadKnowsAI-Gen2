@@ -27,8 +27,8 @@ export default function RootLayout({
         />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
-        <title>DadKnowsAI</title>
         <meta name="description" content="Beta chatbot with GPT-5" />
+        <title>DadKnowsAI</title>
       </head>
       <body>{children}</body>
     </html>
