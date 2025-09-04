@@ -1,20 +1,26 @@
 "use client";
-import { useState } from "react";
+
+import { useState, useMemo } from "react";
 import Link from "next/link";
 
-// Save as app/beta/page.tsx
 export default function BetaLandingPage() {
-  const [email, setEmail] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(false);
-  const [success, setSuccess] = useState<boolean>(false);
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const isValidEmail = useMemo(
+    () => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()),
+    [email]
+  );
+
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (loading) return;
+
     setError(null);
 
-    const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-    if (!email || !valid) {
+    if (!isValidEmail) {
       setError("Please enter a valid email.");
       return;
     }
@@ -24,20 +30,27 @@ export default function BetaLandingPage() {
       const res = await fetch("/api/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim().toLowerCase(), source: "beta-landing" }),
+        credentials: "include", // ensure Set-Cookie sticks
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          source: "beta-landing", // <-- DO NOT CHANGE (automation relies on this)
+        }),
       });
-      if (!res.ok) {
-        // still unlock during beta to reduce friction
+
+      // success if created (200/201) OR already subscribed (409)
+      if (res.ok || res.status === 409) {
         setSuccess(true);
-        return;
+      } else {
+        // still move them forward during beta; you’ll see details in Vercel logs
+        setSuccess(true);
       }
-      setSuccess(true);
-    } catch (_e: unknown) {
+    } catch {
+      // keep friction low during beta
       setSuccess(true);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   const features: { title: string; desc: string }[] = [
     { title: "Plan everyday tasks", desc: "Trip checklists, grocery planners, meal ideas, and simple budgets in plain English." },
@@ -53,18 +66,29 @@ export default function BetaLandingPage() {
         <div className="mx-auto max-w-5xl px-4 py-16 sm:py-20">
           <div className="grid gap-8 lg:grid-cols-2 lg:items-center">
             <div>
-              <span className="inline-block rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700">Beta Program</span>
+              <span className="inline-block rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700">
+                Beta Program
+              </span>
               <h1 className="mt-4 text-4xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">
-                Help us test <span className="underline decoration-sky-300 decoration-4 underline-offset-4">DadKnowsAI</span>
+                Help us test{" "}
+                <span className="underline decoration-sky-300 decoration-4 underline-offset-4">
+                  DadKnowsAI
+                </span>
               </h1>
               <p className="mt-4 max-w-prose text-slate-700">
                 We’re building a calm, practical AI assistant for adults 45+. Join the beta, try it free,
                 and tell us what to improve. Your feedback steers the roadmap.
               </p>
               <ul className="mt-6 space-y-2 text-slate-700">
-                <li className="flex items-start gap-2"><span className="mt-1 h-2 w-2 rounded-full bg-slate-400" /> Quick answers for everyday tasks</li>
-                <li className="flex items-start gap-2"><span className="mt-1 h-2 w-2 rounded-full bg-slate-400" /> No jargon—clear, step-by-step help</li>
-                <li className="flex items-start gap-2"><span className="mt-1 h-2 w-2 rounded-full bg-slate-400" /> Built with feedback from real testers</li>
+                <li className="flex items-start gap-2">
+                  <span className="mt-1 h-2 w-2 rounded-full bg-slate-400" /> Quick answers for everyday tasks
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="mt-1 h-2 w-2 rounded-full bg-slate-400" /> No jargon—clear, step-by-step help
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="mt-1 h-2 w-2 rounded-full bg-slate-400" /> Built with feedback from real testers
+                </li>
               </ul>
             </div>
 
@@ -72,11 +96,15 @@ export default function BetaLandingPage() {
             <div className="lg:justify-self-end">
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <h2 className="text-xl font-semibold text-slate-900">Join the Beta</h2>
-                <p className="mt-1 text-sm text-slate-600">Enter your email to get the quick-start guide and access.</p>
+                <p className="mt-1 text-sm text-slate-600">
+                  Enter your email to get the quick-start guide and access.
+                </p>
 
                 {!success ? (
-                  <form onSubmit={onSubmit} className="mt-4 space-y-3">
-                    <label htmlFor="email" className="block text-sm font-medium text-slate-700">Email</label>
+                  <form onSubmit={onSubmit} className="mt-4 space-y-3" noValidate>
+                    <label htmlFor="email" className="block text-sm font-medium text-slate-700">
+                      Email
+                    </label>
                     <input
                       id="email"
                       type="email"
@@ -86,22 +114,30 @@ export default function BetaLandingPage() {
                       onChange={(e) => setEmail(e.target.value)}
                       className="w-full rounded-xl border border-slate-300 px-3 py-2 text-slate-900 outline-none ring-sky-300/40 focus:border-sky-400 focus:ring-4"
                       placeholder="you@example.com"
+                      aria-invalid={!!error}
+                      aria-describedby={error ? "email-error" : undefined}
                     />
-                    {error && <p className="text-sm text-rose-600">{error}</p>}
+                    {error && (
+                      <p id="email-error" className="text-sm text-rose-600">
+                        {error}
+                      </p>
+                    )}
 
                     <button
                       type="submit"
-                      disabled={loading}
+                      disabled={loading || !isValidEmail}
                       className="mt-2 w-full rounded-2xl bg-slate-900 px-4 py-2.5 text-center text-white shadow-sm transition hover:bg-slate-800 disabled:opacity-60"
                     >
                       {loading ? "Submitting…" : "Sign up & get the guide"}
                     </button>
-                    <p className="text-xs text-slate-500">We’ll send a short PDF: “5 ways to use DadKnowsAI today.”</p>
+                    <p className="text-xs text-slate-500">
+                      We’ll send a short email with “Your first steps” and a link back to DadKnowsAI.
+                    </p>
                   </form>
                 ) : (
-                  <div className="mt-4">
+                  <div className="mt-4" aria-live="polite">
                     <div className="rounded-xl bg-slate-50 p-4 text-slate-700">
-                      <p className="font-medium">You’re in! Check your email for the quick-start PDF.</p>
+                      <p className="font-medium">You’re in! Check your email for the quick-start tips.</p>
                       <p className="mt-1 text-sm">When you’re ready, jump right into the chatbot.</p>
                     </div>
                     <Link
@@ -148,11 +184,15 @@ export default function BetaLandingPage() {
             </div>
             <div className="rounded-xl bg-white p-4 ring-1 ring-slate-200">
               <dt className="font-medium text-slate-900">What happens after I sign up?</dt>
-              <dd className="mt-1 text-slate-700">You’ll receive a short PDF with example prompts and a link to start testing.</dd>
+              <dd className="mt-1 text-slate-700">
+                You’ll receive a short email with “Your first steps” and a link to start testing.
+              </dd>
             </div>
             <div className="rounded-xl bg-white p-4 ring-1 ring-slate-200">
               <dt className="font-medium text-slate-900">Who is this for?</dt>
-              <dd className="mt-1 text-slate-700">Adults 45+ who want practical, everyday help without the tech jargon.</dd>
+              <dd className="mt-1 text-slate-700">
+                Adults 45+ who want practical, everyday help without the tech jargon.
+              </dd>
             </div>
           </dl>
         </div>
@@ -167,7 +207,7 @@ export default function BetaLandingPage() {
             <button
               className="mt-6 inline-block rounded-2xl bg-white/10 px-5 py-3 font-semibold backdrop-blur transition hover:bg-white/20"
               onClick={() => {
-                const el = document.querySelector<HTMLInputElement>("input#email");
+                const el = document.querySelector<HTMLInputElement>("#email");
                 el?.focus();
               }}
             >

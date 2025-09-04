@@ -7,7 +7,7 @@ const RAW_PUB = process.env.BEEHIIV_PUBLICATION_ID || "";
 const BEEHIIV_API_KEY = RAW_KEY.trim();
 const PUB_ID = RAW_PUB.trim();
 
-type Incoming = { email?: string; source?: string };
+type Incoming = { email?: string; source?: string; honeypot?: string };
 
 function isValidEmail(e: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
@@ -41,7 +41,6 @@ async function fetchWithAuth(url: string, payload: unknown): Promise<Response> {
   });
   if (r1.status !== 401) return r1;
 
-  // fallback for some workspaces
   return fetch(url, {
     method: "POST",
     headers: {
@@ -54,7 +53,18 @@ async function fetchWithAuth(url: string, payload: unknown): Promise<Response> {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as Incoming;
+    let body: Incoming;
+    try {
+      body = (await req.json()) as Incoming;
+    } catch {
+      return json({ ok: false, error: "invalid_json" }, 400);
+    }
+
+    // basic bot trap (optional)
+    if (body.honeypot) {
+      return withUnlockCookie(json({ ok: true }));
+    }
+
     const email = (body.email || "").trim().toLowerCase();
     const source = (body.source || "chat_soft_wall").trim();
 
@@ -66,13 +76,11 @@ export async function POST(req: NextRequest) {
     }
 
     const url = `https://api.beehiiv.com/v2/publications/${PUB_ID}/subscriptions`;
-
-    // ✅ Minimal payload + UTM source for segmentation
     const payload = {
       email,
       reactivate_existing: true,
       send_welcome_email: true,
-      utm_source: source, // <-- key for your Beta Testers segment
+      utm_source: source, // <- automation checks this
     };
 
     console.log("DEBUG subscribe with UTM →", payload);
@@ -81,9 +89,7 @@ export async function POST(req: NextRequest) {
     console.log("DEBUG beehiiv response", res.status, text.slice(0, 300));
 
     if (!res.ok && res.status !== 409) {
-      return withUnlockCookie(
-        json({ ok: false, error: "beehiiv_reject", status: res.status })
-      );
+      return withUnlockCookie(json({ ok: false, error: "beehiiv_reject", status: res.status }));
     }
 
     return withUnlockCookie(json({ ok: true, status: res.status }));
@@ -92,3 +98,4 @@ export async function POST(req: NextRequest) {
     return withUnlockCookie(json({ ok: false, error: "subscribe_error" }));
   }
 }
+
