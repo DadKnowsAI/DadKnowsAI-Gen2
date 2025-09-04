@@ -2,23 +2,23 @@
 import { useState } from "react";
 import { trackEvent } from "@/lib/analytics";
 
-type Props = {
-  open: boolean;
-  onClose: () => void;
-  onSuccess: () => void;
-};
+type Props = { open: boolean; onClose: () => void; onSuccess: () => void };
 
 export default function EmailWall({ open, onClose, onSuccess }: Props) {
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   if (!open) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    setErr(null);
+
     try {
+      // attempt event
       const domain = (email.split("@")[1] || "").toLowerCase();
       trackEvent("email_submit_attempt", { email_domain: domain, variant: "softwall_v1" });
 
@@ -27,18 +27,30 @@ export default function EmailWall({ open, onClose, onSuccess }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-      if (!res.ok) throw new Error("subscribe_failed");
 
-      trackEvent("email_submit_success", { source: "softwall", variant: "softwall_v1" });
+      // treat duplicates as success for analytics (Beehiiv often 409)
+      const text = await res.text().catch(() => "");
+      const duplicate = res.status === 409 || /already/i.test(text);
 
-      try {
-        localStorage.setItem("dkai_signed_in", "1");
-      } catch {}
+      if (!res.ok && !duplicate) {
+        setErr(text || "Signup failed. Please try again.");
+        trackEvent("error_subscribe_failed", { code: res.status || "unknown" });
+        return;
+      }
 
+      // success event
+      trackEvent("email_submit_success", {
+        source: "softwall",
+        variant: "softwall_v1",
+        duplicate,
+      });
+
+      try { localStorage.setItem("dkai_signed_in", "1"); } catch {}
       setDone(true);
       onSuccess();
-    } catch {
-      alert("Signup failed. Please try again.");
+    } catch (e) {
+      setErr("Network error. Please try again.");
+      trackEvent("error_subscribe_failed", { code: "network" });
     } finally {
       setSubmitting(false);
     }
@@ -59,6 +71,7 @@ export default function EmailWall({ open, onClose, onSuccess }: Props) {
                 placeholder="you@example.com"
                 className="w-full rounded border p-2"
               />
+              {err && <p className="text-sm text-red-600">{err}</p>}
               <div className="flex gap-2">
                 <button
                   type="submit"
