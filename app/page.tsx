@@ -33,14 +33,14 @@ export default function Home() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
 
-  // Show the wall ONLY if not signed in AND the free chat was already used
+  // Show the wall ONLY if not signed in AND two free Q→A already used
   useEffect(() => {
     const signed =
       typeof window !== "undefined" && localStorage.getItem("dkai_signed_in") === "1";
-    const freeUsed =
-      typeof window !== "undefined" && localStorage.getItem("dkai_free_used") === "1";
+    const freeCount =
+      typeof window !== "undefined" ? Number(localStorage.getItem("dkai_free_count") || "0") : 0;
 
-    const shouldShow = !signed && freeUsed;
+    const shouldShow = !signed && freeCount >= 2;
     setShowWall(shouldShow);
 
     if (shouldShow) {
@@ -48,13 +48,15 @@ export default function Home() {
     }
   }, []);
 
-  // After one complete answer, show the wall for unsigned users (only once)
+  // After one complete answer, increment counter and show the wall after 2 answers (for unsigned)
   function maybeTriggerWallAfterFreeAnswer() {
     try {
       const signed = localStorage.getItem("dkai_signed_in") === "1";
-      const freeUsed = localStorage.getItem("dkai_free_used") === "1";
-      if (!signed && !freeUsed) {
-        localStorage.setItem("dkai_free_used", "1"); // mark the one free Q→A as used
+      const current = Number(localStorage.getItem("dkai_free_count") || "0");
+      const next = current + 1;
+      localStorage.setItem("dkai_free_count", String(next));
+
+      if (!signed && next >= 2) {
         setShowWall(true);
         sendGA("wall_view", { variant: "softwall_v1" });
       }
@@ -126,7 +128,7 @@ export default function Home() {
             )
           );
         }
-        // one full streamed answer finished → trigger wall if needed
+        // one full streamed answer finished → trigger wall logic
         maybeTriggerWallAfterFreeAnswer();
       } else {
         // --- non-streaming path ---
@@ -134,7 +136,7 @@ export default function Home() {
         setMessages((prev) =>
           prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: full } : m))
         );
-        // one full non-streamed answer finished → trigger wall if needed
+        // one full non-streamed answer finished → trigger wall logic
         maybeTriggerWallAfterFreeAnswer();
       }
     } catch (e) {
