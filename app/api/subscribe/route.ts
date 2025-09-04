@@ -7,83 +7,115 @@ const RAW_PUB = process.env.BEEHIIV_PUBLICATION_ID || "";
 const BEEHIIV_API_KEY = RAW_KEY.trim();
 const PUB_ID = RAW_PUB.trim();
 
-type Payload = { email?: string; source?: string; honeypot?: string };
+type Incoming = { email?: string; source?: string; honeypot?: string };
 
-function isValidEmail(e: string) {
+function isValidEmail(e: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+}
+
+function json(obj: Record<string, unknown>, status = 200): Response {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
+}
+
+function withUnlockCookie(res: Response): Response {
+  const headers = new Headers(res.headers);
+  headers.set(
+    "Set-Cookie",
+    "dkai_captured=1; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax"
+  );
+  return new Response(res.body, { status: res.status, headers });
+}
+
+async function safeText(r: Response): Promise<string> {
+  try {
+    return await r.text();
+  } catch {
+    return "";
+  }
+}
+
+async function fetchWithAuth(
+  url: string,
+  method: "POST" | "PATCH",
+  payload: unknown
+): Promise<Response> {
+  const body = JSON.stringify(payload);
+  const asBearer = await fetch(url, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${BEEHIIV_API_KEY}`,
+    },
+    body,
+  });
+  if (asBearer.status !== 401) return asBearer;
+
+  // Fallback header some Beehiiv workspaces expect
+  return fetch(url, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Authorization": BEEHIIV_API_KEY,
+    },
+    body,
+  });
 }
 
 export async function POST(req: NextRequest) {
   try {
-    let body: Payload = {};
+    // ---- parse & validate ----
+    let body: unknown;
     try {
-      body = (await req.json()) as Payload;
+      body = await req.json();
     } catch {
       return json({ ok: false, error: "invalid_json" }, 400);
     }
+    if (typeof body !== "object" || body === null) {
+      return json({ ok: false, error: "invalid_body" }, 400);
+    }
 
-    if (body.honeypot) return withUnlockCookie(json({ ok: true }));
+    const { email: rawEmail, source: rawSource, honeypot } = body as Incoming;
 
-    const email = (body.email || "").trim().toLowerCase();
-    const source = (body.source || "chat_soft_wall").trim();
+    if (honeypot) return withUnlockCookie(json({ ok: true })); // silent drop
 
-    if (!email || !isValidEmail(email)) return json({ ok: false, error: "invalid_email" }, 400);
-    if (!BEEHIIV_API_KEY || !PUB_ID) return json({ ok: false, error: "beehiiv_not_configured" }, 500);
+    const email = (rawEmail ?? "").trim().toLowerCase();
+    const source = (rawSource ?? "chat_soft_wall").trim();
 
-    // --- helpers ---
-    const headersA = { "Content-Type": "application/json", Authorization: `Bearer ${BEEHIIV_API_KEY}` };
-    const headersB = { "Content-Type": "application/json", "X-Authorization": BEEHIIV_API_KEY };
+    if (!email || !isValidEmail(email)) {
+      return json({ ok: false, error: "invalid_email" }, 400);
+    }
+    if (!BEEHIIV_API_KEY || !PUB_ID) {
+      return json({ ok: false, error: "beehiiv_not_configured" }, 500);
+    }
 
-    const post = async (url: string, payload: any) => {
-      let r = await fetch(url, { method: "POST", headers: headersA, body: JSON.stringify(payload) });
-      if (r.status === 401) r = await fetch(url, { method: "POST", headers: headersB, body: JSON.stringify(payload) });
-      return r;
-    };
-
-    const patch = async (url: string, payload: any) => {
-      let r = await fetch(url, { method: "PATCH", headers: headersA, body: JSON.stringify(payload) });
-      if (r.status === 401) r = await fetch(url, { method: "PATCH", headers: headersB, body: JSON.stringify(payload) });
-      return r;
-    };
-
-    // ---- Attempt 1: your current endpoint (subscriptions under publication) ----
+    // ---- Attempt 1: /publications/:id/subscriptions ----
     const url1 = `https://api.beehiiv.com/v2/publications/${PUB_ID}/subscriptions`;
     const payload1 = {
       email,
       reactivate_existing: true,
       send_welcome_email: true,
-      utm_source: source,                       // <-- segmentation via UTM
-      custom_fields: { signup_source: source }, // <-- custom field for reliable segmenting
-    };
+      utm_source: source,
+      custom_fields: { signup_source: source },
+    } as const;
 
-    console.log("DEBUG subscribe try1 →", { url: "/publications/:id/subscriptions", email, utm_source: source });
-    let r1 = await post(url1, payload1);
-    let body1: any = null;
-    try { body1 = await r1.json(); } catch { /* noop */ }
+    console.log("DEBUG subscribe try1 →", {
+      path: "/publications/:id/subscriptions",
+      email,
+      utm_source: source,
+    });
 
-    // Accept success or "already subscribed"
-    const ok1 = r1.ok || [409, 422].includes(r1.status);
+    const r1 = await fetchWithAuth(url1, "POST", payload1);
+    const ok1 = r1.ok || r1.status === 409 || r1.status === 422;
 
-    // If created/exists but custom fields didn’t stick, try PATCH subscriber with fields
-    if (ok1) {
-      const subId = body1?.id || body1?.data?.id || body1?.subscriber_id;
-      if (subId) {
-        const urlPatch = `https://api.beehiiv.com/v2/subscribers/${subId}`;
-        const patchPayload = { custom_fields: { signup_source: source } };
-        const rp = await patch(urlPatch, patchPayload);
-        console.log("DEBUG patch custom_fields →", { id: subId, status: rp.status });
-      } else {
-        console.log("DEBUG patch custom_fields → skipped (no id in response)");
-      }
-    }
-
-    // If attempt 1 failed (e.g., metadata ignored), try Attempt 2
     if (!ok1) {
-      const text1 = await safeText(r1);
-      console.warn("WARN try1 failed", r1.status, text1.slice(0, 300));
+      const t1 = (await safeText(r1)).slice(0, 300);
+      console.warn("WARN try1 failed", r1.status, t1);
 
-      // ---- Attempt 2: alternate endpoint (/subscribers) with publication_id ----
-      const url2 = `https://api.beehiiv.com/v2/subscribers`;
+      // ---- Attempt 2: /subscribers (alt path) ----
+      const url2 = "https://api.beehiiv.com/v2/subscribers";
       const payload2 = {
         email,
         publication_id: PUB_ID,
@@ -91,49 +123,36 @@ export async function POST(req: NextRequest) {
         custom_fields: { signup_source: source },
         reactivate_existing: true,
         send_welcome_email: true,
-      };
+      } as const;
 
-      console.log("DEBUG subscribe try2 →", { url: "/subscribers", email, utm_source: source });
-      const r2 = await post(url2, payload2);
-      const ok2 = r2.ok || [409, 422].includes(r2.status);
+      console.log("DEBUG subscribe try2 →", {
+        path: "/subscribers",
+        email,
+        utm_source: source,
+      });
 
-      if (ok2) {
-        let body2: any = null;
-        try { body2 = await r2.json(); } catch { /* noop */ }
-        const subId2 = body2?.id || body2?.data?.id || body2?.subscriber_id;
-        if (subId2) {
-          const urlPatch2 = `https://api.beehiiv.com/v2/subscribers/${subId2}`;
-          const rp2 = await patch(urlPatch2, { custom_fields: { signup_source: source } });
-          console.log("DEBUG patch custom_fields (try2) →", { id: subId2, status: rp2.status });
-        }
-        return withUnlockCookie(json({ ok: true, via: "subscribers" }));
+      const r2 = await fetchWithAuth(url2, "POST", payload2);
+      const ok2 = r2.ok || r2.status === 409 || r2.status === 422;
+
+      if (!ok2) {
+        const t2 = (await safeText(r2)).slice(0, 300);
+        console.error("ERROR both attempts failed", {
+          s1: r1.status,
+          s2: r2.status,
+          t2,
+        });
+        // Keep beta UX smooth; still unlock
+        return withUnlockCookie(json({ ok: true, warn: "beehiiv_error" }));
       }
 
-      const text2 = await safeText(r2);
-      console.error("ERROR both attempts failed", { s1: r1.status, s2: r2.status, t2: text2.slice(0, 300) });
-      // still unlock to keep UX smooth
-      return withUnlockCookie(json({ ok: true, warn: "beehiiv_error" }));
+      return withUnlockCookie(json({ ok: true, via: "subscribers" }));
     }
 
-    // Attempt 1 succeeded
+    // Attempt 1 worked
     return withUnlockCookie(json({ ok: true, via: "publications_subscriptions" }));
   } catch (e) {
     console.error("Subscribe error", e);
+    // Keep UX smooth during beta
     return withUnlockCookie(json({ ok: true, warn: "subscribe_error" }));
   }
-}
-
-// --- helpers ---
-function json(obj: Record<string, unknown>, status = 200) {
-  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json; charset=utf-8" } });
-}
-
-function withUnlockCookie(res: Response) {
-  const headers = new Headers(res.headers);
-  headers.set("Set-Cookie", "dkai_captured=1; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax");
-  return new Response(res.body, { status: res.status, headers });
-}
-
-async function safeText(r: Response): Promise<string> {
-  try { return await r.text(); } catch { return ""; }
 }
