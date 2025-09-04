@@ -41,6 +41,7 @@ async function fetchWithAuth(url: string, payload: unknown): Promise<Response> {
   });
   if (r1.status !== 401) return r1;
 
+  // fallback for some workspaces
   return fetch(url, {
     method: "POST",
     headers: {
@@ -55,6 +56,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Incoming;
     const email = (body.email || "").trim().toLowerCase();
+    const source = (body.source || "chat_soft_wall").trim();
 
     if (!email || !isValidEmail(email)) {
       return json({ ok: false, error: "invalid_email" }, 400);
@@ -64,20 +66,24 @@ export async function POST(req: NextRequest) {
     }
 
     const url = `https://api.beehiiv.com/v2/publications/${PUB_ID}/subscriptions`;
+
+    // ✅ Minimal payload + UTM source for segmentation
     const payload = {
       email,
       reactivate_existing: true,
       send_welcome_email: true,
+      utm_source: source, // <-- key for your Beta Testers segment
     };
 
-    console.log("DEBUG minimal subscribe →", payload);
+    console.log("DEBUG subscribe with UTM →", payload);
     const res = await fetchWithAuth(url, payload);
     const text = await res.text();
-
     console.log("DEBUG beehiiv response", res.status, text.slice(0, 300));
 
     if (!res.ok && res.status !== 409) {
-      return withUnlockCookie(json({ ok: false, error: "beehiiv_reject", status: res.status }));
+      return withUnlockCookie(
+        json({ ok: false, error: "beehiiv_reject", status: res.status })
+      );
     }
 
     return withUnlockCookie(json({ ok: true, status: res.status }));
