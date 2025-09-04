@@ -6,15 +6,14 @@ import EmailWall from "./components/EmailWall";
 type Role = "user" | "assistant";
 type Msg = { role: Role; content: string };
 
-/* ---------------- GA helper (safe, typed) ---------------- */
+/* ---------------- GA + FB helpers (safe, typed) ---------------- */
 declare global {
   interface Window {
     gtag?: (...args: unknown[]) => void;
 
-    // --- FB helpers we exposed in app/layout.tsx ---
     dkTrack?: {
-      chatEngaged: (messagesCount?: number) => void;
-      lead: (extra?: Record<string, unknown>) => void;
+      chatEngaged?: (messagesCount?: number) => void;
+      lead?: (extra?: Record<string, unknown>) => void;
     };
   }
 }
@@ -23,11 +22,14 @@ function sendGA(name: string, params: Record<string, unknown> = {}) {
     window.gtag("event", name, params);
   }
 }
-/* --------------------------------------------------------- */
+/* --------------------------------------------------------------- */
 
 export default function Home() {
   const [messages, setMessages] = useState<Msg[]>([
-    { role: "assistant", content: "Hi! Ask me anything. I give practical, step-by-step answers." },
+    {
+      role: "assistant",
+      content: "Hi! Ask me anything. I give practical, step-by-step answers.",
+    },
   ]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -42,9 +44,12 @@ export default function Home() {
   // Show the wall ONLY if not signed in AND two free Q→A already used
   useEffect(() => {
     const signed =
-      typeof window !== "undefined" && localStorage.getItem("dkai_signed_in") === "1";
+      typeof window !== "undefined" &&
+      localStorage.getItem("dkai_signed_in") === "1";
     const freeCount =
-      typeof window !== "undefined" ? Number(localStorage.getItem("dkai_free_count") || "0") : 0;
+      typeof window !== "undefined"
+        ? Number(localStorage.getItem("dkai_free_count") || "0")
+        : 0;
 
     const shouldShow = !signed && freeCount >= 2;
     setShowWall(shouldShow);
@@ -62,10 +67,10 @@ export default function Home() {
       const next = current + 1;
       localStorage.setItem("dkai_free_count", String(next));
 
-      // --- A) Fire ChatEngaged exactly at the second completed Q→A (unsigned users) ---
+      // --- Fire ChatEngaged exactly at the second completed Q→A (unsigned users) ---
       if (!signed && next === 2) {
         try {
-          window.dkTrack?.chatEngaged(2);
+          window.dkTrack?.chatEngaged?.(2);
         } catch {}
       }
 
@@ -87,7 +92,9 @@ export default function Home() {
       const ts = localStorage.getItem("dkai_signup_ts");
       if (ts) {
         const seconds = Math.round((Date.now() - Number(ts)) / 1000);
-        sendGA("chat_first_message_after_signup", { seconds_since_signup: seconds });
+        sendGA("chat_first_message_after_signup", {
+          seconds_since_signup: seconds,
+        });
         localStorage.removeItem("dkai_signup_ts");
       }
     } catch {}
@@ -107,7 +114,9 @@ export default function Home() {
       if (res.status === 429) {
         setMessages((prev) =>
           prev.map((m, i) =>
-            i === prev.length - 1 ? { ...m, content: "Please sign up to keep chatting." } : m
+            i === prev.length - 1
+              ? { ...m, content: "Please sign up to keep chatting." }
+              : m
           )
         );
         setShowWall(true);
@@ -121,7 +130,9 @@ export default function Home() {
         const errText = await res.text().catch(() => "Unknown error");
         setMessages((prev) =>
           prev.map((m, i) =>
-            i === prev.length - 1 ? { ...m, content: `[error from server]\n${errText}` } : m
+            i === prev.length - 1
+              ? { ...m, content: `[error from server]\n${errText}` }
+              : m
           )
         );
         return;
@@ -137,7 +148,9 @@ export default function Home() {
           const chunk = decoder.decode(value, { stream: true });
           setMessages((prev) =>
             prev.map((m, i) =>
-              i === prev.length - 1 ? { ...m, content: m.content + chunk } : m
+              i === prev.length - 1
+                ? { ...m, content: m.content + chunk }
+                : m
             )
           );
         }
@@ -147,7 +160,9 @@ export default function Home() {
         // --- non-streaming path ---
         const full = await res.text();
         setMessages((prev) =>
-          prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: full } : m))
+          prev.map((m, i) =>
+            i === prev.length - 1 ? { ...m, content: full } : m
+          )
         );
         // one full non-streamed answer finished → trigger wall logic
         maybeTriggerWallAfterFreeAnswer();
@@ -156,7 +171,9 @@ export default function Home() {
       const msg = e instanceof Error ? e.message : String(e);
       setMessages((prev) =>
         prev.map((m, i) =>
-          i === prev.length - 1 ? { ...m, content: `[connection error] ${msg}` } : m
+          i === prev.length - 1
+            ? { ...m, content: `[connection error] ${msg}` }
+            : m
         )
       );
     } finally {
@@ -232,11 +249,10 @@ export default function Home() {
             localStorage.setItem("dkai_signed_in", "1");
             localStorage.setItem("dkai_signup_ts", String(Date.now())); // analytics timing
           } catch {}
-          // --- B) Fire Lead at the exact moment your existing success happens ---
+          // --- Fire Lead at the exact moment your existing success happens ---
           try {
-            window.dkTrack?.lead({ content_name: "Email Signup" });
+            window.dkTrack?.lead?.({ content_name: "Email Signup" });
           } catch {}
-
           setShowWall(false);
         }}
       />
