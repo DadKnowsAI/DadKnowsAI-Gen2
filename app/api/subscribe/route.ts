@@ -1,7 +1,7 @@
 // app/api/subscribe/route.ts
 import { NextRequest } from "next/server";
 
-export const runtime = "nodejs"; // keep Node for fetch/crypto parity
+export const runtime = "nodejs"; // keep Node for parity
 
 const RAW_KEY = process.env.BEEHIIV_API_KEY || "";
 const RAW_PUB = process.env.BEEHIIV_PUBLICATION_ID || "";
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
   try {
     let body: Payload = {};
     try {
-      body = await req.json();
+      body = (await req.json()) as Payload;
     } catch {
       return json({ ok: false, error: "invalid_json" }, 400);
     }
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     });
 
     // Try Authorization: Bearer first
-    let res = await fetch(url, {
+    let upstream = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -62,8 +62,8 @@ export async function POST(req: NextRequest) {
     });
 
     // Fallback to X-Authorization if needed
-    if (res.status === 401) {
-      res = await fetch(url, {
+    if (upstream.status === 401) {
+      upstream = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -74,24 +74,23 @@ export async function POST(req: NextRequest) {
     }
 
     // Treat already-subscribed/reactivate codes as success for UX
-    if (!res.ok && ![409, 422].includes(res.status)) {
-      const text = await safeText(res);
+    if (!upstream.ok && ![409, 422].includes(upstream.status)) {
+      const text = await safeText(upstream);
       return json(
-        { ok: false, error: "beehiiv_error", status: res.status, detail: text?.slice(0, 500) },
-        res.status
+        { ok: false, error: "beehiiv_error", status: upstream.status, detail: text.slice(0, 500) },
+        upstream.status
       );
     }
 
     // Success → set the same unlock cookie you already use
     return withUnlockCookie(json({ ok: true }));
-  } catch (err) {
-    // Keep the same high-level behavior but return JSON
+  } catch (_err: unknown) {
     return json({ ok: false, error: "subscribe_error" }, 500);
   }
 }
 
 // --- helpers ---
-function json(obj: any, status = 200) {
+function json(obj: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8" },
@@ -102,13 +101,13 @@ function withUnlockCookie(res: Response) {
   const headers = new Headers(res.headers);
   headers.set(
     "Set-Cookie",
-    // Same cookie as your original code; 1 year, secure, HttpOnly
+    // 1 year, secure, HttpOnly
     "dkai_captured=1; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax"
   );
   return new Response(res.body, { status: res.status, headers });
 }
 
-async function safeText(r: Response) {
+async function safeText(r: Response): Promise<string> {
   try {
     return await r.text();
   } catch {

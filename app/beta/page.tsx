@@ -1,40 +1,50 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
 
-// Save this file as: app/beta/page.tsx (Next.js App Router)
-// TailwindCSS required. Assumes you already have an API route at /api/subscribe that accepts { email } via POST.
-// Behavior: On successful submit, reveals a big "Get testing now!" button linking to the home page.
-
+// Save as app/beta/page.tsx
 export default function BetaLandingPage() {
-  const [email, setEmail] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
+  const [email, setEmail] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(false);
+  const [success, setSuccess] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  const onSubmit = async (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+
+    const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    if (!email || !valid) {
       setError("Please enter a valid email.");
       return;
     }
+
     setLoading(true);
     try {
       const res = await fetch("/api/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, source: "beta-landing" }),
+        body: JSON.stringify({ email: email.trim().toLowerCase(), source: "beta-landing" }),
       });
-      if (!res.ok) throw new Error(`Signup failed (${res.status})`);
+      if (!res.ok) {
+        // still unlock during beta to reduce friction
+        setSuccess(true);
+        return;
+      }
       setSuccess(true);
-    } catch (err: any) {
-      // Even if the API fails, we can still flip success to reduce friction during beta.
-      console.error(err);
+    } catch (_e: unknown) {
       setSuccess(true);
     } finally {
       setLoading(false);
     }
   };
+
+  const features: { title: string; desc: string }[] = [
+    { title: "Plan everyday tasks", desc: "Trip checklists, grocery planners, meal ideas, and simple budgets in plain English." },
+    { title: "Tech made easy", desc: "Step-by-step help for phone or computer problems—no jargon." },
+    { title: "Learn faster", desc: "Explain any topic simply, then go deeper as you ask follow-ups." },
+    { title: "Forms & letters", desc: "Draft emails, letters, or checklists you can edit and send." },
+  ];
 
   return (
     <main className="min-h-screen bg-white">
@@ -53,7 +63,7 @@ export default function BetaLandingPage() {
               </p>
               <ul className="mt-6 space-y-2 text-slate-700">
                 <li className="flex items-start gap-2"><span className="mt-1 h-2 w-2 rounded-full bg-slate-400" /> Quick answers for everyday tasks</li>
-                <li className="flex items-start gap-2"><span className="mt-1 h-2 w-2 rounded-full bg-slate-400" /> No jargon—clear, step‑by‑step help</li>
+                <li className="flex items-start gap-2"><span className="mt-1 h-2 w-2 rounded-full bg-slate-400" /> No jargon—clear, step-by-step help</li>
                 <li className="flex items-start gap-2"><span className="mt-1 h-2 w-2 rounded-full bg-slate-400" /> Built with feedback from real testers</li>
               </ul>
             </div>
@@ -91,15 +101,15 @@ export default function BetaLandingPage() {
                 ) : (
                   <div className="mt-4">
                     <div className="rounded-xl bg-slate-50 p-4 text-slate-700">
-                      <p className="font-medium">You’re in! Check your email for the quick‑start PDF.</p>
+                      <p className="font-medium">You’re in! Check your email for the quick-start PDF.</p>
                       <p className="mt-1 text-sm">When you’re ready, jump right into the chatbot.</p>
                     </div>
-                    <a
+                    <Link
                       href="/"
                       className="mt-4 block w-full rounded-2xl bg-sky-600 px-4 py-3 text-center text-white font-semibold shadow-sm transition hover:bg-sky-700"
                     >
                       Get testing now →
-                    </a>
+                    </Link>
                   </div>
                 )}
 
@@ -117,18 +127,7 @@ export default function BetaLandingPage() {
         <div className="mx-auto max-w-5xl px-4 py-12">
           <h3 className="text-lg font-semibold text-slate-900">What can DadKnowsAI do?</h3>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
-            {[
-              {
-                title: "Plan everyday tasks",
-                desc: "Trip checklists, grocery planners, meal ideas, and simple budgets in plain English.",
-              },
-              {
-                title: "Tech made easy",
-                desc: "Step‑by‑step help for phone or computer problems—no jargon.",
-              },
-              { title: "Learn faster", desc: "Explain any topic simply, then go deeper as you ask follow‑ups." },
-              { title: "Forms & letters", desc: "Draft emails, letters, or checklists you can edit and send." },
-            ].map((it) => (
+            {features.map((it) => (
               <div key={it.title} className="rounded-xl border border-slate-200 p-4">
                 <p className="font-medium text-slate-900">{it.title}</p>
                 <p className="mt-1 text-slate-600">{it.desc}</p>
@@ -165,17 +164,15 @@ export default function BetaLandingPage() {
           <div className="rounded-2xl bg-slate-900 p-8 text-white">
             <h3 className="text-2xl font-bold">Ready to help shape DadKnowsAI?</h3>
             <p className="mt-2 text-slate-200">Join the beta, try it, and tell us what to improve.</p>
-            <a
-              href="#top"
+            <button
               className="mt-6 inline-block rounded-2xl bg-white/10 px-5 py-3 font-semibold backdrop-blur transition hover:bg-white/20"
-              onClick={(e) => {
-                e.preventDefault();
-                const el = document.querySelector("input#email");
-                (el as HTMLInputElement | null)?.focus();
+              onClick={() => {
+                const el = document.querySelector<HTMLInputElement>("input#email");
+                el?.focus();
               }}
             >
               Join with your email
-            </a>
+            </button>
           </div>
         </div>
       </section>
