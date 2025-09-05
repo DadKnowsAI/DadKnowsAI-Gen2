@@ -1,42 +1,49 @@
 // app/api/chat/route.ts
+/* eslint-disable no-console */
 import { NextRequest } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 
-export const runtime = "nodejs"; // cookie updates + supabase-js are simpler on node
+export const runtime = "nodejs";
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const MODEL = "gpt-4o-mini";
 
-/** Ensure we have a chat_session and a cookie to tie messages together */
-async function ensureSession(req: NextRequest) {
+/** Minimal message type matching your client payload */
+type ChatRole = "user" | "assistant" | "system";
+type ChatMessage = { role: ChatRole; content: string };
+
+/** Type for OpenAI streaming lines we parse */
+type OpenAIStreamChunk = {
+  choices?: Array<{ delta?: { content?: string } }>;
+};
+
+/** Ensure we have a chat_session (tracked via cookie dkai_sid) */
+async function ensureSession(req: NextRequest): Promise<string> {
   const cookies = req.headers.get("cookie") || "";
   const sidMatch = cookies.match(/(?:^|;\s*)dkai_sid=([^;]+)/);
   let sessionId = sidMatch ? decodeURIComponent(sidMatch[1]) : null;
 
   if (!sessionId) {
-    // create a session row
     const { data, error } = await supabaseAdmin
       .from("chat_session")
       .insert({})
       .select("id")
       .single();
-    if (error) throw error;
-    sessionId = data.id as string;
+    if (error) throw new Error(error.message);
+    sessionId = String(data.id);
   }
-
-  return sessionId!;
+  return sessionId;
 }
 
-/** Insert one message row */
 async function logMessage(args: {
   sessionId: string;
-  role: "user" | "assistant" | "system";
+  role: ChatRole;
   content: string;
   model?: string | null;
   token_usage?: number | null;
   tags?: string[] | null;
-  meta?: Record<string, any> | null;
-}) {
+  meta?: Record<string, unknown> | null;
+}): Promise<void> {
   const { error } = await supabaseAdmin.from("chat_message").insert({
     session_id: args.sessionId,
     role: args.role,
@@ -49,12 +56,32 @@ async function logMessage(args: {
   if (error) console.error("logMessage error:", error.message);
 }
 
+/** Safe JSON.parse for streaming lines */
+function parseStreamLine(line: string): OpenAIStreamChunk | null {
+  try {
+    return JSON.parse(line) as OpenAIStreamChunk;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: NextRequest) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return new Response("OPENAI_API_KEY missing", { status: 500 });
 
-  // ---- Parse body (your existing contract: { messages: [...] })
-  const { messages = [] } = await req.json();
+  // ---- Parse body
+  const body = (await req.json()) as { messages?: unknown };
+  const messages = Array.isArray(body.messages)
+    ? (body.messages.filter(
+        (m): m is ChatMessage =>
+          !!m &&
+          typeof (m as { role?: unknown }).role === "string" &&
+          typeof (m as { content?: unknown }).content === "string" &&
+          ["user", "assistant", "system"].includes(
+            String((m as { role: unknown }).role)
+          )
+      ) as ChatMessage[])
+    : ([] as ChatMessage[]);
 
   // ---- Gating (unchanged)
   const cookieHeader = req.headers.get("cookie") || "";
@@ -74,24 +101,23 @@ export async function POST(req: NextRequest) {
   let sessionId: string;
   try {
     sessionId = await ensureSession(req);
-  } catch (e: any) {
-    console.error("ensureSession error:", e?.message);
+  } catch (e) {
+    console.error("ensureSession error:", e);
     return new Response("Failed to start session", { status: 500 });
   }
 
-  // ---- Log the latest user message (if any)
-  // We’ll log only the final user turn in the array to avoid duplicating prior history.
-  const lastUser = [...messages].reverse().find((m: any) => m?.role === "user");
+  // ---- Log only the latest user turn (avoid duplicates)
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
   if (lastUser?.content) {
     await logMessage({
       sessionId,
       role: "user",
-      content: String(lastUser.content),
+      content: lastUser.content,
       meta: { from: "api/chat", gated: !captured, priorCount },
     });
   }
 
-  // ---- Call OpenAI (stream) – identical behavior to your original
+  // ---- Call OpenAI (stream)
   const upstream = await fetch(OPENAI_URL, {
     method: "POST",
     headers: {
@@ -123,8 +149,6 @@ export async function POST(req: NextRequest) {
 
   const encoder = new TextEncoder();
   const reader = upstream.body.getReader();
-
-  // We’ll accumulate the streamed tokens to log the assistant message when done.
   let fullAnswer = "";
 
   const stream = new ReadableStream({
@@ -132,7 +156,6 @@ export async function POST(req: NextRequest) {
       const { value, done } = await reader.read();
 
       if (done) {
-        // Stream finished — log the assistant reply
         try {
           if (fullAnswer.trim().length > 0) {
             await logMessage({
@@ -143,45 +166,45 @@ export async function POST(req: NextRequest) {
               meta: { streamed: true },
             });
           }
-        } catch (e: any) {
-          console.error("assistant log error:", e?.message);
+        } catch (e) {
+          console.error("assistant log error:", e);
         }
         controller.close();
         return;
       }
 
-      const chunk = new TextDecoder().decode(value);
-      for (const line of chunk.split("\n")) {
-        const trimmed = line.trim();
+      const chunkText = new TextDecoder().decode(value);
+      for (const rawLine of chunkText.split("\n")) {
+        const trimmed = rawLine.trim();
         if (!trimmed.startsWith("data:")) continue;
+
         const data = trimmed.slice(5).trim();
         if (data === "[DONE]") continue;
-        try {
-          const json = JSON.parse(data);
-          const token = json.choices?.[0]?.delta?.content ?? "";
-          if (token) {
-            fullAnswer += token;
-            controller.enqueue(encoder.encode(token));
-          }
-        } catch {
-          // ignore JSON parse errors on keep-alives
+
+        const json = parseStreamLine(data);
+        const token =
+          json?.choices?.[0]?.delta?.content !== undefined
+            ? String(json.choices[0].delta?.content ?? "")
+            : "";
+
+        if (token) {
+          fullAnswer += token;
+          controller.enqueue(encoder.encode(token));
         }
       }
     },
   });
 
-  // ---- Set/refresh cookies: counter + session id
+  // ---- Cookies: counter + session id
   const headers = new Headers({
     "Content-Type": "text/plain; charset=utf-8",
     "Set-Cookie": [
       `dkai_c=${newCount}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax`,
-      // keep a session cookie so we tie future turns to the same session row
       `dkai_sid=${encodeURIComponent(
         sessionId
-      )}; Path=/; Max-Age=1209600; HttpOnly; Secure; SameSite=Lax`, // 14 days
+      )}; Path=/; Max-Age=1209600; HttpOnly; Secure; SameSite=Lax`,
     ].join(", "),
   });
 
   return new Response(stream, { status: 200, headers });
 }
-
